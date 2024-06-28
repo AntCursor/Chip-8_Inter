@@ -10,7 +10,7 @@ async fn main() {
 
     let mut emu = Emulator::new();
 
-    let file: &str = "TETRIS";
+    let file: &str = "roms/TETRIS";
     let mut rom = File::open(file).unwrap();
     emu.load_file_memory(&mut rom).unwrap();
 
