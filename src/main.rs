@@ -5,7 +5,7 @@ use emulator::Emulator;
 pub use macroquad::{input::KeyCode, prelude::*};
 #[macroquad::main("Chip-8")]
 async fn main() {
-    let mut instruction_persec = 2000;
+    let mut instruction_persec = 100000;
     let instruction_duration =
         |instruction_persec| time::Duration::from_secs_f64(1. / instruction_persec as f64);
 

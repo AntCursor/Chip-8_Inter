@@ -7,7 +7,6 @@ use std::{
 use macroquad::prelude::*;
 pub struct Emulator {
     memory: [u8; 4096],
-    display_buffer: [u8; 2048],
     stack: Vec<u16>,
     delay_timer: u8,
     sound_timer: u8,
@@ -15,13 +14,14 @@ pub struct Emulator {
     index_register: u16,
     registers: [u8; 16],
     keys_pressed: Vec<u8>,
+    display_buffer: [u8; 2048],
+    dirty_rects: HashMap<(usize, usize), Rect>,
 }
 
 impl Emulator {
     pub fn new() -> Self {
         let mut out = Self {
             memory: [0; 4096],
-            display_buffer: [0; 2048],
             stack: Vec::new(),
             delay_timer: 0,
             sound_timer: 0,
@@ -29,6 +29,8 @@ impl Emulator {
             index_register: 0,
             registers: [0; 16],
             keys_pressed: Vec::new(),
+            display_buffer: [0; 2048],
+            dirty_rects: HashMap::new(),
         };
         out.memory[0x50..=0x9F].copy_from_slice(&[
             0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
@@ -150,17 +152,17 @@ impl Emulator {
             self.program_counter += 2;
         }
     }
-    fn skip_x_eq_y(&mut self, registerx: u8, registery: u8) {
-        let registerx = self.registers[registerx as usize];
-        let registery = self.registers[registery as usize];
-        if registerx == registery {
+    fn skip_x_eq_y(&mut self, x_register: u8, y_register: u8) {
+        let x_register = self.registers[x_register as usize];
+        let y_register = self.registers[y_register as usize];
+        if x_register == y_register {
             self.program_counter += 2;
         }
     }
-    fn skip_x_ne_y(&mut self, registerx: u8, registery: u8) {
-        let registerx = self.registers[registerx as usize];
-        let registery = self.registers[registery as usize];
-        if registerx != registery {
+    fn skip_x_ne_y(&mut self, x_register: u8, y_register: u8) {
+        let x_register = self.registers[x_register as usize];
+        let y_register = self.registers[y_register as usize];
+        if x_register != y_register {
             self.program_counter += 2;
         }
     }
@@ -174,101 +176,101 @@ impl Emulator {
         self.registers[register as usize] =
             self.registers[register as usize].wrapping_add(val as u8);
     }
-    fn set_registerx_y(&mut self, registerx: u8, registery: u8) {
-        let registery = self.registers[registery as usize];
-        let registerx = &mut self.registers[registerx as usize];
-        *registerx = registery.clone();
+    fn set_registerx_y(&mut self, x_register: u8, y_register: u8) {
+        let y_register = self.registers[y_register as usize];
+        let x_register = &mut self.registers[x_register as usize];
+        *x_register = y_register.clone();
     }
-    fn or_xy(&mut self, registerx: u8, registery: u8) {
-        let registery = self.registers[registery as usize];
-        let registerx = &mut self.registers[registerx as usize];
-        *registerx = *registerx | registery.clone();
+    fn or_xy(&mut self, x_register: u8, y_register: u8) {
+        let y_register = self.registers[y_register as usize];
+        let x_register = &mut self.registers[x_register as usize];
+        *x_register = *x_register | y_register.clone();
     }
-    fn and_xy(&mut self, registerx: u8, registery: u8) {
-        let registery = self.registers[registery as usize];
-        let registerx = &mut self.registers[registerx as usize];
-        *registerx = *registerx & registery.clone();
+    fn and_xy(&mut self, x_register: u8, y_register: u8) {
+        let y_register = self.registers[y_register as usize];
+        let x_register = &mut self.registers[x_register as usize];
+        *x_register = *x_register & y_register.clone();
     }
-    fn xor_xy(&mut self, registerx: u8, registery: u8) {
-        let registery = self.registers[registery as usize];
-        let registerx = &mut self.registers[registerx as usize];
-        *registerx = *registerx ^ registery.clone();
+    fn xor_xy(&mut self, x_register: u8, y_register: u8) {
+        let y_register = self.registers[y_register as usize];
+        let x_register = &mut self.registers[x_register as usize];
+        *x_register = *x_register ^ y_register.clone();
     }
-    fn add_xy(&mut self, registerx: u8, registery: u8) {
-        let registery = self.registers[registery as usize];
-        let registerx = &mut self.registers[registerx as usize];
+    fn add_xy(&mut self, x_register: u8, y_register: u8) {
+        let y_register = self.registers[y_register as usize];
+        let x_register = &mut self.registers[x_register as usize];
         let vf: bool;
-        (*registerx, vf) = registerx.overflowing_add(registery);
+        (*x_register, vf) = x_register.overflowing_add(y_register);
         self.registers[0xF as usize] = vf.into();
     }
-    fn sub_xy(&mut self, registerx: u8, registery: u8) {
-        let registery = self.registers[registery as usize];
-        let registerx = &mut self.registers[registerx as usize];
+    fn sub_xy(&mut self, x_register: u8, y_register: u8) {
+        let y_register = self.registers[y_register as usize];
+        let x_register = &mut self.registers[x_register as usize];
         let vf: bool;
-        (*registerx, vf) = registerx.overflowing_sub(registery);
+        (*x_register, vf) = x_register.overflowing_sub(y_register);
         self.registers[0xF as usize] = (!vf).into();
     }
-    fn shift_x_right(&mut self, registerx: u8, registery: u8) {
-        let registerx = &mut self.registers[registery as usize];
-        // let registerx = &mut self.registers[registerx as usize];
-        let tregister = registerx.clone();
+    fn shift_x_right(&mut self, x_register: u8, y_register: u8) {
+        let x_register = &mut self.registers[y_register as usize];
+        // let x_register = &mut self.registers[x_register as usize];
+        let tregister = x_register.clone();
 
-        *registerx = *registerx >> 1;
+        *x_register = *x_register >> 1;
         self.registers[0xF as usize] = tregister & 0b00000001;
     }
-    fn sub_yx(&mut self, registerx: u8, registery: u8) {
-        let registery = self.registers[registery as usize];
-        let registerx = &mut self.registers[registerx as usize];
+    fn sub_yx(&mut self, x_register: u8, y_register: u8) {
+        let y_register = self.registers[y_register as usize];
+        let x_register = &mut self.registers[x_register as usize];
         let vf: bool;
-        (*registerx, vf) = registery.overflowing_sub(*registerx);
+        (*x_register, vf) = y_register.overflowing_sub(*x_register);
         self.registers[0xF as usize] = (!vf).into();
     }
-    fn shift_x_left(&mut self, registerx: u8, registery: u8) {
-        let registerx = &mut self.registers[registery as usize];
-        // let registerx = &mut self.registers[registerx as usize];
-        let tregister = registerx.clone();
+    fn shift_x_left(&mut self, x_register: u8, y_register: u8) {
+        let x_register = &mut self.registers[y_register as usize];
+        // let x_register = &mut self.registers[x_register as usize];
+        let tregister = x_register.clone();
 
-        *registerx = *registerx << 1;
+        *x_register = *x_register << 1;
         self.registers[0xF as usize] = (tregister & 0b10000000) >> 7;
     }
     fn jump_offset(&mut self, address: u16) {
         self.program_counter = address + self.registers[0] as u16;
     }
-    fn generate_random(&mut self, registerx: u8, val: u16) {
-        let registerx = &mut self.registers[registerx as usize];
-        *registerx = macroquad::rand::gen_range(0, 255) & val as u8;
+    fn generate_random(&mut self, x_register: u8, val: u16) {
+        let x_register = &mut self.registers[x_register as usize];
+        *x_register = macroquad::rand::gen_range(0, 255) & val as u8;
     }
-    fn jump_ifkey(&mut self, registerx: u8) {
+    fn jump_ifkey(&mut self, x_register: u8) {
         if self
             .keys_pressed
-            .contains(&self.registers[registerx as usize])
+            .contains(&self.registers[x_register as usize])
         {
             self.program_counter += 2;
         }
     }
-    fn jump_ifnkey(&mut self, registerx: u8) {
+    fn jump_ifnkey(&mut self, x_register: u8) {
         if !self
             .keys_pressed
-            .contains(&self.registers[registerx as usize])
+            .contains(&self.registers[x_register as usize])
         {
             self.program_counter += 2;
         }
     }
-    fn get_delay(&mut self, registerx: u8) {
-        self.registers[registerx as usize] = self.delay_timer;
+    fn get_delay(&mut self, x_register: u8) {
+        self.registers[x_register as usize] = self.delay_timer;
     }
-    fn wait_key(&mut self, registerx: u8) {
+    fn wait_key(&mut self, x_register: u8) {
         if self.keys_pressed.len() != 0 {
-            self.registers[registerx as usize] = self.keys_pressed[0];
+            self.registers[x_register as usize] = self.keys_pressed[0];
         } else {
             self.program_counter -= 2;
         }
     }
-    fn set_delay(&mut self, registerx: u8) {
-        self.delay_timer = self.registers[registerx as usize];
+    fn set_delay(&mut self, x_register: u8) {
+        self.delay_timer = self.registers[x_register as usize];
     }
-    fn set_sound(&mut self, registerx: u8) {
-        self.sound_timer = self.registers[registerx as usize];
+    fn set_sound(&mut self, x_register: u8) {
+        self.sound_timer = self.registers[x_register as usize];
     }
     fn add_iregister(&mut self, register: u8) {
         self.index_register = self
@@ -278,12 +280,12 @@ impl Emulator {
             self.registers[0xF as usize] = 1;
         }
     }
-    fn char_address(&mut self, registerx: u8) {
-        let chara = self.registers[registerx as usize];
+    fn char_address(&mut self, x_register: u8) {
+        let chara = self.registers[x_register as usize];
         self.index_register = (0x50 + chara * 5) as u16;
     }
-    fn to_bcd(&mut self, registerx: u8) {
-        let x: &str = &format!("{:03}", self.registers[registerx as usize]);
+    fn to_bcd(&mut self, x_register: u8) {
+        let x: &str = &format!("{:03}", self.registers[x_register as usize]);
 
         let index = self.index_register;
         for r in 0..3 {
@@ -292,21 +294,21 @@ impl Emulator {
                 .unwrap_or(0) as u8;
         }
     }
-    fn store_registers(&mut self, registerx: u8) {
+    fn store_registers(&mut self, x_register: u8) {
         let index = self.index_register;
-        for r in 0..=registerx {
+        for r in 0..=x_register {
             self.memory[index as usize + r as usize] = self.registers[r as usize];
         }
     }
-    fn load_registers(&mut self, registerx: u8) {
+    fn load_registers(&mut self, x_register: u8) {
         let index = self.index_register;
-        for r in 0..=registerx {
+        for r in 0..=x_register {
             self.registers[r as usize] = self.memory[index as usize + r as usize];
         }
     }
-    fn draw_buffer(&mut self, registerx: u8, registery: u8, height: u8) {
-        let x: usize = (self.registers[registerx as usize] % 64) as usize;
-        let y: usize = (self.registers[registery as usize] % 32) as usize;
+    fn draw_buffer(&mut self, x_register: u8, y_register: u8, height: u8) {
+        let x: usize = (self.registers[x_register as usize] % 64) as usize;
+        let y: usize = (self.registers[y_register as usize] % 32) as usize;
         self.registers[0xF as usize] = 0;
         for i in 0..height {
             for b in 0..8 {
@@ -317,25 +319,27 @@ impl Emulator {
                     if bit == 1 && set == 1 {
                         self.registers[0xF as usize] = 1;
                         self.display_buffer[address] = 0;
+                        self.dirty_rects.remove(&(x + b, y + i as usize));
                     } else if set == 1 {
                         self.display_buffer[address] = 1;
+                        self.dirty_rects.insert(
+                            (x + b, y + i as usize),
+                            Rect::new((x + b) as f32, (y + i as usize) as f32, 1., 1.),
+                        );
                     }
                 }
             }
         }
     }
     pub async fn draw_px(&self, color: &Color, px_size: &Vec2, offset: &Vec2) {
-        for (i, on) in self.display_buffer.iter().enumerate() {
-            let i = i;
-            if *on == 1 {
-                draw_rectangle(
-                    (i % 64) as f32 * px_size.x + offset.x,
-                    (i / 64) as f32 * px_size.y + offset.y,
-                    px_size.x,
-                    px_size.y,
-                    *color,
-                );
-            }
+        for (_, px) in self.dirty_rects.iter() {
+            draw_rectangle(
+                px.x * px_size.x + offset.x,
+                px.y * px_size.y + offset.y,
+                px_size.x,
+                px_size.y,
+                *color,
+            );
         }
     }
     pub fn load_file_memory(&mut self, file: &mut File) -> io::Result<usize> {
