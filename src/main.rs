@@ -5,14 +5,15 @@ use emulator::Emulator;
 pub use macroquad::{input::KeyCode, prelude::*};
 #[macroquad::main("Chip-8")]
 async fn main() {
-    let mut insts_sec = 2000;
-    let mut inst_duration = time::Duration::from_secs_f64(1. / insts_sec as f64);
+    let mut instruction_persec = 2000;
+    let instruction_duration =
+        |instruction_persec| time::Duration::from_secs_f64(1. / instruction_persec as f64);
 
-    let mut emu = Emulator::new();
+    let mut emulator_instance = Emulator::new();
 
-    let file: &str = "roms/TETRIS";
-    let mut rom = File::open(file).unwrap();
-    emu.load_file_memory(&mut rom).unwrap();
+    let file_str: &str = "roms/TETRIS";
+    let mut file = File::open(file_str).unwrap();
+    emulator_instance.load_file_memory(&mut file).unwrap();
 
     let key_map: HashMap<KeyCode, u8> = HashMap::from([
         (KeyCode::Key1, 0),
@@ -38,49 +39,55 @@ async fn main() {
         let now = time::Instant::now();
 
         if !paused.0 | paused.1 {
-            let inst = emu.fetch_inst();
-            println!("{:04x}", inst);
-            emu.execute(emu.extract_inst(inst));
+            let instruction = emulator_instance.fetch_instruction();
+            println!("{:04x}", instruction);
+            emulator_instance.execute(emulator_instance.extract_instruction(instruction));
             paused.1 = false;
         }
-        let t = now.elapsed();
-        if t.lt(&inst_duration) {
-            sleep(inst_duration.sub(t));
+        let now_elapsed = now.elapsed();
+        if now_elapsed.lt(&instruction_duration(instruction_persec)) {
+            sleep(instruction_duration(instruction_persec).sub(now_elapsed));
         }
 
-        let t = now.elapsed();
-        if t.lt(&time::Duration::from_secs_f64(1. / 60. as f64)) {
+        let now_elapsed = now.elapsed();
+        if now_elapsed.lt(&time::Duration::from_secs_f64(1. / 60. as f64)) {
             if is_key_pressed(KeyCode::Tab) {
-                emu = Emulator::new();
-                let mut rom = File::open(file).unwrap();
-                emu.load_file_memory(&mut rom).unwrap();
+                emulator_instance = Emulator::new();
+                let mut file = File::open(file_str).unwrap();
+                emulator_instance.load_file_memory(&mut file).unwrap();
                 println!("reset");
             }
             if is_key_pressed(KeyCode::Space) {
                 paused = (!paused.0, false);
             }
             if is_key_down(KeyCode::KpAdd) {
-                insts_sec += 1;
-                inst_duration = time::Duration::from_secs_f64(1. / insts_sec as f64);
-                println!("{}", insts_sec);
+                instruction_persec += 1;
+                println!("{}", instruction_persec);
             }
             if is_key_down(KeyCode::KpSubtract) {
-                insts_sec -= 1;
-                inst_duration = time::Duration::from_secs_f64(1. / insts_sec as f64);
-                println!("{}", insts_sec);
+                instruction_persec -= 1;
+                println!("{}", instruction_persec);
             }
             if is_key_pressed(KeyCode::N) {
                 paused = (true, true);
             }
             if !paused.0 | paused.1 {
-                emu.decrement_timers();
+                emulator_instance.decrement_timers();
             }
-            emu.update_input(&key_map);
+            emulator_instance.update_input(&key_map);
 
             let px_size = vec2(screen_width() / 64., screen_width() / 64.);
             clear_background(BLACK);
-            emu.draw_px(&GREEN, &px_size, &vec2(0., 0.)).await;
-            draw_text(&format!("{:09.2}", 1. / t.as_secs_f64()), 10., 30., 30., WHITE);
+            emulator_instance
+                .draw_px(&GREEN, &px_size, &vec2(0., 0.))
+                .await;
+            draw_text(
+                &format!("{:09.2}", 1. / now_elapsed.as_secs_f64()),
+                10.,
+                30.,
+                30.,
+                WHITE,
+            );
 
             next_frame().await;
         }
