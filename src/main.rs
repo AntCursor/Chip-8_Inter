@@ -54,8 +54,8 @@ async fn main() {
             if is_key_pressed(KeyCode::Tab) {
                 emulator_instance = Emulator::new();
                 let mut file = File::open(file_str).unwrap();
-                emulator_instance.load_file_memory(&mut file).unwrap();
                 println!("reset");
+                emulator_instance.load_file_memory(&mut file).unwrap();
             }
             if is_key_pressed(KeyCode::Space) {
                 paused = (!paused.0, false);
